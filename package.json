@@ -85,6 +85,7 @@
     "url": "https://github.com/videojs/video.js.git"
   },
   "files": [
+    "dist/",
     "*.html",
     "*.js",
     "*.json",
