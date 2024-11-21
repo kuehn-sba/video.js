@@ -154,7 +154,7 @@ function videojs(id, options, ready) {
   const rootNode = inShadowDom ? el.getRootNode() : el.ownerDocument.body;
 
   if (!el.ownerDocument.defaultView || !rootNode.contains(el)) {
-    log.warn('The element supplied is not included in the DOM');
+    // log.warn('The element supplied is not included in the DOM'); // @fix warn, because global is required RIO
   }
 
   options = options || {};
