@@ -124,6 +124,8 @@ class TextTrackDisplay extends Component {
     };
 
     player.on('loadstart', (e) => this.toggleDisplay(e));
+    player.on('useractive', updateDisplayTextHandler);
+    player.on('userinactive', updateDisplayTextHandler);
     player.on('texttrackchange', updateDisplayTextHandler);
     player.on('loadedmetadata', (e) => {
       this.updateDisplayOverlay();
@@ -262,11 +264,14 @@ class TextTrackDisplay extends Component {
   }
 
   /**
-   * Update the displayed TextTrack when a either a {@link Player#texttrackchange} or
-   * a {@link Player#fullscreenchange} is fired.
+   * Update the displayed {@link TextTrack} when either a {@link Player#texttrackchange},
+   * a {@link Player#fullscreenchange}, a {@link Player#useractive}, or a
+   * {@link Player#userinactive} is fired.
    *
    * @listens Player#texttrackchange
    * @listens Player#fullscreenchange
+   * @listens Player#useractive
+   * @listens Player#userinactive
    */
   updateDisplay() {
     const tracks = this.player_.textTracks();
@@ -321,7 +326,7 @@ class TextTrackDisplay extends Component {
       this.updateForTrack(descriptionsTrack);
     }
 
-    if (!window.CSS.supports('inset', '10px')) {
+    if (!(window.CSS !== undefined && window.CSS.supports('inset', '10px'))) {
       const textTrackDisplay = this.el_;
       const vjsTextTrackCues = textTrackDisplay.querySelectorAll('.vjs-text-track-cue');
       const controlBarHeight = this.player_.controlBar.el_.getBoundingClientRect().height;
@@ -365,7 +370,7 @@ class TextTrackDisplay extends Component {
   updateDisplayOverlay() {
     // inset-inline and inset-block are not supprted on old chrome, but these are
     // only likely to be used on TV devices
-    if (!this.player_.videoHeight() || !window.CSS.supports('inset-inline: 10px')) {
+    if (!this.player_.videoHeight() || !(window.CSS !== undefined && window.CSS.supports('inset-inline: 10px'))) {
       return;
     }
 

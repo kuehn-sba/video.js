@@ -8,6 +8,7 @@ import * as Dom from '../../utils/dom.js';
 import * as Fn from '../../utils/fn.js';
 import {formatTime} from '../../utils/time.js';
 import {silencePromise} from '../../utils/promise';
+import {merge} from '../../utils/obj';
 import document from 'global/document';
 
 /** @import Player from '../../player' */
@@ -15,12 +16,6 @@ import document from 'global/document';
 import './load-progress-bar.js';
 import './play-progress-bar.js';
 import './mouse-time-display.js';
-
-// The number of seconds the `step*` functions move the timeline.
-const STEP_SECONDS = 5;
-
-// The multiplier of STEP_SECONDS that PgUp/PgDown move the timeline.
-const PAGE_KEY_MULTIPLIER = 12;
 
 /**
  * Seek bar and container for the progress bars. Uses {@link PlayProgressBar}
@@ -38,9 +33,31 @@ class SeekBar extends Slider {
    *
    * @param {Object} [options]
    *        The key/value store of player options.
+   * @param {number} [options.stepSeconds=5]
+   *        The number of seconds to increment on keyboard control
+   * @param {number} [options.pageMultiplier=12]
+   *        The multiplier of stepSeconds that PgUp/PgDown move the timeline.
    */
   constructor(player, options) {
+    options = merge(SeekBar.prototype.options_, options);
+
+    // Avoid mutating the prototype's `children` array by creating a copy
+    options.children = [...options.children];
+
+    const shouldDisableSeekWhileScrubbing =
+      (player.options_.disableSeekWhileScrubbingOnMobile && (IS_IOS || IS_ANDROID)) ||
+      (player.options_.disableSeekWhileScrubbingOnSTV);
+
+    // Add the TimeTooltip as a child if we are on desktop, or on mobile with `disableSeekWhileScrubbingOnMobile: true`
+    if ((!IS_IOS && !IS_ANDROID) || shouldDisableSeekWhileScrubbing) {
+      options.children.splice(1, 0, 'mouseTimeDisplay');
+    }
+
     super(player, options);
+
+    this.shouldDisableSeekWhileScrubbing_ = shouldDisableSeekWhileScrubbing;
+    this.pendingSeekTime_ = null;
+
     this.setEventHandlers_();
   }
 
@@ -181,7 +198,7 @@ class SeekBar extends Slider {
 
       // update the progress bar time tooltip with the current time
       if (this.bar) {
-        this.bar.update(Dom.getBoundingClientRect(this.el()), this.getProgress());
+        this.bar.update(Dom.getBoundingClientRect(this.el()), this.getProgress(), event);
       }
     });
 
@@ -219,12 +236,38 @@ class SeekBar extends Slider {
   }
 
   /**
+   * Getter and setter for pendingSeekTime.
+   * Ensures the value is clamped between 0 and duration.
+   *
+   * @param {number|null} [time] - Optional. The new pending seek time, can be a number or null.
+   * @return {number|null} - The current pending seek time.
+   */
+  pendingSeekTime(time) {
+    if (time !== undefined) {
+      if (time !== null) {
+        const duration = this.player_.duration();
+
+        this.pendingSeekTime_ = Math.max(0, Math.min(time, duration));
+      } else {
+        this.pendingSeekTime_ = null;
+      }
+    }
+    return this.pendingSeekTime_;
+  }
+
+  /**
    * Get the percentage of media played so far.
    *
    * @return {number}
    *         The percentage of media played so far (0 to 1).
    */
   getPercent() {
+    // If we have a pending seek time, we are scrubbing on mobile and should set the slider percent
+    // to reflect the current scrub location.
+    if (this.pendingSeekTime() !== null) {
+      return this.pendingSeekTime() / this.player_.duration();
+    }
+
     const currentTime = this.getCurrentTime_();
     let percent;
     const liveTracker = this.player_.liveTracker;
@@ -260,7 +303,12 @@ class SeekBar extends Slider {
     event.stopPropagation();
 
     this.videoWasPlaying = !this.player_.paused();
-    this.player_.pause();
+
+    // Don't pause if we are on mobile and `disableSeekWhileScrubbingOnMobile: true`.
+    // In that case, playback should continue while the player scrubs to a new location.
+    if (!this.shouldDisableSeekWhileScrubbing_) {
+      this.player_.pause();
+    }
 
     super.handleMouseDown(event);
   }
@@ -324,8 +372,12 @@ class SeekBar extends Slider {
       }
     }
 
-    // Set new time (tell player to seek to new time)
-    this.userSeek_(newTime);
+    // if on mobile and `disableSeekWhileScrubbingOnMobile: true`, keep track of the desired seek point but we won't initiate the seek until 'touchend'
+    if (this.shouldDisableSeekWhileScrubbing_) {
+      this.pendingSeekTime(newTime);
+    } else {
+      this.userSeek_(newTime);
+    }
 
     if (this.player_.options_.enableSmoothSeeking) {
       this.update();
@@ -371,6 +423,13 @@ class SeekBar extends Slider {
     }
     this.player_.scrubbing(false);
 
+    // If we have a pending seek time, then we have finished scrubbing on mobile and should initiate a seek.
+    if (this.pendingSeekTime() !== null) {
+      this.userSeek_(this.pendingSeekTime());
+
+      this.pendingSeekTime(null);
+    }
+
     /**
      * Trigger timeupdate because we're done seeking and the time has changed.
      * This is particularly useful for if the player is paused to time the time displays.
@@ -389,17 +448,45 @@ class SeekBar extends Slider {
   }
 
   /**
+   * Handles pending seek time when `disableSeekWhileScrubbingOnSTV` is enabled.
+   *
+   * @param {number} stepAmount - The number of seconds to step (positive for forward, negative for backward).
+   */
+  handlePendingSeek_(stepAmount) {
+    if (!this.player_.paused()) {
+      this.player_.pause();
+    }
+
+    const currentPos = this.pendingSeekTime() !== null ?
+      this.pendingSeekTime() :
+      this.player_.currentTime();
+
+    this.pendingSeekTime(currentPos + stepAmount);
+    this.player_.trigger({ type: 'timeupdate', target: this, manuallyTriggered: true });
+  }
+
+  /**
    * Move more quickly fast forward for keyboard-only users
    */
   stepForward() {
-    this.userSeek_(this.player_.currentTime() + STEP_SECONDS);
+    // if `disableSeekWhileScrubbingOnSTV: true`, keep track of the desired seek point but we won't initiate the seek
+    if (this.shouldDisableSeekWhileScrubbing_) {
+      this.handlePendingSeek_(this.options().stepSeconds);
+    } else {
+      this.userSeek_(this.player_.currentTime() + this.options().stepSeconds);
+    }
   }
 
   /**
    * Move more quickly rewind for keyboard-only users
    */
   stepBack() {
-    this.userSeek_(this.player_.currentTime() - STEP_SECONDS);
+    // if `disableSeekWhileScrubbingOnSTV: true`, keep track of the desired seek point but we won't initiate the seek
+    if (this.shouldDisableSeekWhileScrubbing_) {
+      this.handlePendingSeek_(-this.options().stepSeconds);
+    } else {
+      this.userSeek_(this.player_.currentTime() - this.options().stepSeconds);
+    }
   }
 
   /**
@@ -411,6 +498,10 @@ class SeekBar extends Slider {
    *
    */
   handleAction(event) {
+    if (this.pendingSeekTime() !== null) {
+      this.userSeek_(this.pendingSeekTime());
+      this.pendingSeekTime(null);
+    }
     if (this.player_.paused()) {
       this.player_.play();
     } else {
@@ -466,11 +557,11 @@ class SeekBar extends Slider {
     } else if (event.key === 'PageDown') {
       event.preventDefault();
       event.stopPropagation();
-      this.userSeek_(this.player_.currentTime() - (STEP_SECONDS * PAGE_KEY_MULTIPLIER));
+      this.userSeek_(this.player_.currentTime() - (this.options().stepSeconds * this.options().pageMultiplier));
     } else if (event.key === 'PageUp') {
       event.preventDefault();
       event.stopPropagation();
-      this.userSeek_(this.player_.currentTime() + (STEP_SECONDS * PAGE_KEY_MULTIPLIER));
+      this.userSeek_(this.player_.currentTime() + (this.options().stepSeconds * this.options().pageMultiplier));
     } else {
       // Pass keydown handling up for unsupported keys
       super.handleKeyDown(event);
@@ -510,13 +601,10 @@ SeekBar.prototype.options_ = {
     'loadProgressBar',
     'playProgressBar'
   ],
-  barName: 'playProgressBar'
+  barName: 'playProgressBar',
+  stepSeconds: 5,
+  pageMultiplier: 12
 };
-
-// MouseTimeDisplay tooltips should not be added to a player on mobile devices
-if (!IS_IOS && !IS_ANDROID) {
-  SeekBar.prototype.options_.children.splice(1, 0, 'mouseTimeDisplay');
-}
 
 Component.registerComponent('SeekBar', SeekBar);
 export default SeekBar;

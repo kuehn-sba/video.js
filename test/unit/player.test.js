@@ -16,6 +16,7 @@ import * as middleware from '../../src/js/tech/middleware.js';
 import * as Events from '../../src/js/utils/events.js';
 import pkg from '../../package.json';
 import * as Guid from '../../src/js/utils/guid.js';
+import SeekBar from '../../src/js/control-bar/progress-control/seek-bar';
 
 QUnit.module('Player', {
   beforeEach() {
@@ -2345,6 +2346,41 @@ QUnit.test('should not allow to register custom player when any player has been 
   videojs.registerComponent('Player', Player);
 });
 
+QUnit.test('should not allow to register custom player when any player still exists', function(assert) {
+  const videoTag1 = document.createElement('video');
+  const videoTag2 = document.createElement('video');
+
+  const fixture = document.getElementById('qunit-fixture');
+
+  fixture.appendChild(videoTag1);
+  fixture.appendChild(videoTag2);
+
+  const player1 = videojs(videoTag1);
+  const player2 = videojs(videoTag2);
+
+  class CustomPlayer extends Player {}
+
+  assert.throws(function() {
+    videojs.registerComponent('Player', CustomPlayer);
+  }, 'Can not register Player component after player has been created');
+
+  player1.dispose();
+
+  // still throws, because player2 still exists
+  assert.throws(function() {
+    videojs.registerComponent('Player', CustomPlayer);
+  }, 'Can not register Player component after player has been created');
+
+  player2.dispose();
+
+  // successfully registers, because no player exists anymore
+  // should not throw
+  videojs.registerComponent('Player', CustomPlayer);
+
+  // reset the Player to the original value;
+  videojs.registerComponent('Player', Player);
+});
+
 QUnit.test('setters getters passed to tech', function(assert) {
   const tag = TestHelpers.makeTag();
   const fixture = document.getElementById('qunit-fixture');
@@ -3611,6 +3647,154 @@ QUnit.test('smooth seeking set to true should update the display time components
   player.dispose();
 });
 
+QUnit.test('mouseTimeDisplay should be added as child when disableSeekWhileScrubbingOnMobile is true on mobile', function(assert) {
+  const originalIsIos = browser.IS_IOS;
+
+  browser.stub_IS_IOS(true);
+
+  const player = TestHelpers.makePlayer({ disableSeekWhileScrubbingOnMobile: true });
+  const seekBar = player.controlBar.progressControl.seekBar;
+  const mouseTimeDisplay = seekBar.getChild('mouseTimeDisplay');
+
+  assert.ok(mouseTimeDisplay, 'mouseTimeDisplay added as a child');
+
+  player.dispose();
+  browser.stub_IS_IOS(originalIsIos);
+});
+
+QUnit.test('mouseTimeDisplay should not be added as child on mobile when disableSeekWhileScrubbingOnMobile is false', function(assert) {
+  const originalIsIos = browser.IS_IOS;
+
+  browser.stub_IS_IOS(true);
+
+  const player = TestHelpers.makePlayer({ disableSeekWhileScrubbingOnMobile: false });
+  const seekBar = player.controlBar.progressControl.seekBar;
+  const mouseTimeDisplay = seekBar.getChild('mouseTimeDisplay');
+
+  assert.notOk(mouseTimeDisplay, 'mouseTimeDisplay not added as a child');
+
+  player.dispose();
+  browser.stub_IS_IOS(originalIsIos);
+});
+
+QUnit.test('Seeking should occur while scrubbing on mobile when disableSeekWhileScrubbingOnMobile is false', function(assert) {
+  const originalIsIos = browser.IS_IOS;
+
+  browser.stub_IS_IOS(true);
+
+  const player = TestHelpers.makePlayer({ disableSeekWhileScrubbingOnMobile: false });
+  const seekBar = player.controlBar.progressControl.seekBar;
+  const userSeekSpy = sinon.spy(seekBar, 'userSeek_');
+
+  // Simulate a source loaded
+  player.duration(10);
+
+  // Simulate scrub
+  seekBar.handleMouseMove({ pageX: 200 });
+
+  assert.ok(userSeekSpy.calledOnce, 'Seek initiated while scrubbing');
+
+  player.dispose();
+  browser.stub_IS_IOS(originalIsIos);
+});
+
+QUnit.test('Seeking should not occur while scrubbing on mobile when disableSeekWhileScrubbingOnMobile is true', function(assert) {
+  const originalIsIos = browser.IS_IOS;
+
+  browser.stub_IS_IOS(true);
+
+  const player = TestHelpers.makePlayer({ disableSeekWhileScrubbingOnMobile: true });
+  const seekBar = player.controlBar.progressControl.seekBar;
+  const userSeekSpy = sinon.spy(seekBar, 'userSeek_');
+
+  // Simulate a source loaded
+  player.duration(10);
+
+  // Simulate scrub
+  seekBar.handleMouseMove({ pageX: 200 });
+
+  assert.ok(userSeekSpy.notCalled, 'Seek not initiated while scrubbing');
+
+  player.dispose();
+  browser.stub_IS_IOS(originalIsIos);
+});
+
+QUnit.test('Seek should occur when scrubbing completes on mobile when disableSeekWhileScrubbingOnMobile is true', function(assert) {
+  const originalIsIos = browser.IS_IOS;
+
+  browser.stub_IS_IOS(true);
+
+  const player = TestHelpers.makePlayer({ disableSeekWhileScrubbingOnMobile: true });
+  const seekBar = player.controlBar.progressControl.seekBar;
+  const userSeekSpy = sinon.spy(seekBar, 'userSeek_');
+  const targetSeekTime = 5;
+
+  // Simulate a source loaded
+  player.duration(10);
+
+  seekBar.pendingSeekTime(targetSeekTime);
+
+  // Simulate scrubbing completion
+  seekBar.handleMouseUp();
+
+  assert.ok(userSeekSpy.calledWith(targetSeekTime), 'Seeks to correct location when scrubbing completes');
+
+  player.dispose();
+  browser.stub_IS_IOS(originalIsIos);
+});
+
+QUnit.test('Player should pause while scrubbing on mobile when disableSeekWhileScrubbingOnMobile is false', function(assert) {
+  const originalIsIos = browser.IS_IOS;
+
+  browser.stub_IS_IOS(true);
+
+  const player = TestHelpers.makePlayer({ disableSeekWhileScrubbingOnMobile: false });
+  const seekBar = player.controlBar.progressControl.seekBar;
+  const pauseSpy = sinon.spy(player, 'pause');
+
+  // Simulate start playing
+  player.play();
+
+  const mockMouseDownEvent = {
+    pageX: 200,
+    stopPropagation: () => {}
+  };
+
+  // Simulate scrubbing start
+  seekBar.handleMouseDown(mockMouseDownEvent);
+
+  assert.ok(pauseSpy.calledOnce, 'Player paused');
+
+  player.dispose();
+  browser.stub_IS_IOS(originalIsIos);
+});
+
+QUnit.test('Player should not pause while scrubbing on mobile when disableSeekWhileScrubbingOnMobile is true', function(assert) {
+  const originalIsIos = browser.IS_IOS;
+
+  browser.stub_IS_IOS(true);
+
+  const player = TestHelpers.makePlayer({ disableSeekWhileScrubbingOnMobile: true });
+  const seekBar = player.controlBar.progressControl.seekBar;
+  const pauseSpy = sinon.spy(player, 'pause');
+
+  // Simulate start playing
+  player.play();
+
+  const mockMouseDownEvent = {
+    pageX: 200,
+    stopPropagation: () => { }
+  };
+
+  // Simulate scrubbing start
+  seekBar.handleMouseDown(mockMouseDownEvent);
+
+  assert.ok(pauseSpy.notCalled, 'Player not paused');
+
+  player.dispose();
+  browser.stub_IS_IOS(originalIsIos);
+});
+
 QUnit.test('addSourceElement calls tech method with correct args', function(assert) {
   const player = TestHelpers.makePlayer();
   const addSourceElementSpy = sinon.spy(player.tech_, 'addSourceElement');
@@ -3664,4 +3848,110 @@ QUnit.test('removeSourceElement returns false if no tech', function(assert) {
 
   assert.notOk(removed, 'Returned false');
   player.dispose();
+});
+
+QUnit.module('SmartTV Seek Logic', function(hooks) {
+  let player;
+  let seekBar;
+
+  hooks.beforeEach(function() {
+    player = TestHelpers.makePlayer({
+      disableSeekWhileScrubbingOnSTV: true,
+      controlBar: {
+        progressControl: {
+          seekBar: {
+            stepSeconds: 5
+          }
+        }
+      }
+    });
+
+    seekBar = player.controlBar.progressControl.seekBar;
+    player.duration(100);
+  });
+
+  hooks.afterEach(function() {
+    player.dispose();
+  });
+
+  QUnit.test('Step forward updates pendingSeekTime but does not seek immediately', function(assert) {
+    player.currentTime(40);
+    seekBar.stepForward();
+
+    assert.equal(
+      seekBar.pendingSeekTime(),
+      45,
+      'pendingSeekTime should be 45 (40 + 5) after stepForward'
+    );
+
+    assert.equal(
+      player.currentTime(),
+      40,
+      'Player currentTime remains unchanged (no immediate seek)'
+    );
+  });
+
+  QUnit.test('Step back updates pendingSeekTime but does not seek immediately', function(assert) {
+    player.currentTime(40);
+    seekBar.stepBack();
+
+    assert.equal(
+      seekBar.pendingSeekTime(),
+      35,
+      'pendingSeekTime should be 35 (40 - 5) after stepBack'
+    );
+
+    assert.equal(
+      player.currentTime(),
+      40,
+      'Player currentTime remains unchanged (no immediate seek)'
+    );
+  });
+
+  QUnit.test('Pressing Enter seeks to pendingSeekTime and resets it', function(assert) {
+    seekBar.pendingSeekTime(50);
+
+    const userSeekSpy = sinon.spy(seekBar, 'userSeek_');
+
+    seekBar.handleAction();
+
+    assert.ok(
+      userSeekSpy.calledWith(50),
+      'Pressing Enter should trigger seek to pendingSeekTime (50)'
+    );
+
+    assert.equal(
+      seekBar.pendingSeekTime(),
+      null,
+      'pendingSeekTime should be reset to null after seeking'
+    );
+
+    assert.equal(
+      player.currentTime(),
+      50,
+      'Player currentTime should be updated to 50 after pressing Enter'
+    );
+  });
+
+  QUnit.test('Step forward/back seeks immediately when disableSeekWhileScrubbingOnSTV is false', function(assert) {
+    player.options_.disableSeekWhileScrubbingOnSTV = false;
+    seekBar = new SeekBar(player);
+    player.currentTime(40);
+
+    seekBar.stepForward();
+
+    assert.equal(
+      player.currentTime(),
+      45,
+      'Player currentTime should update immediately when stepping forward'
+    );
+
+    seekBar.stepBack();
+
+    assert.equal(
+      player.currentTime(),
+      40,
+      'Player currentTime should update immediately when stepping back'
+    );
+  });
 });

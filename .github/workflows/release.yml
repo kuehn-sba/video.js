@@ -6,11 +6,22 @@ on:
     - "v[0-9]+.[0-9]+.[0-9]+"
     # match semver pre-releases
     - "v[0-9]+.[0-9]+.[0-9]+-*"
+permissions:
+  contents: read
+
 jobs:
   release:
     env:
       NETLIFY_BASE: 'videojs-preview.netlify.app'
+    # npm trusts this workflow only when the job runs in the Deploy environment,
+    # which is limited to release tags.
+    environment: Deploy
     runs-on: ubuntu-latest
+    permissions:
+      contents: write      # Required for creating a release
+      discussions: write   # Required for creating a release
+      id-token: write      # Required for provenance
+      packages: write      # Required for publishing
     steps:
       - name: Checkout
         uses: actions/checkout@v3
@@ -19,13 +30,21 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Tag filters can't express a branch, so refuse v8 tags that aren't on 8.x.
+      - name: ensure the tag is on the 8.x branch
+        run: |
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/8.x; then
+            echo "::error::$GITHUB_REF_NAME is not on the 8.x branch; v8 releases are published from 8.x only"
+            exit 1
+          fi
+
       - name: read node version from .nvmrc
         run: echo "NVMRC=$(cat .nvmrc)" >> $GITHUB_OUTPUT
         shell: bash
         id: nvm
 
       - name: setup node
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: '${{steps.nvm.outputs.NVMRC}}'
           cache: npm
@@ -35,11 +54,11 @@ jobs:
       - name: npm install
         run: npm i --prefer-offline --no-audit
 
-      # publish runs build for us via a prepublishOnly script
+      # publish runs build for us via a prepublishOnly script.
+      # v8 uses its own dist-tags (next-8, latest-8, like next-7/latest-7) because
+      # latest and next belong to Video.js 10.
       - name: npm release
-        run: npm publish --tag next
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --provenance --tag next-8
 
       - name: get current changelog
         run: node -e "console.log(require('./build/current-changelog.js')())" > CHANGELOG-LATEST.md
@@ -66,6 +85,8 @@ jobs:
           discussion_category_name: Releases
 
   deploy:
+    permissions:
+      contents: none
     needs: release
     runs-on: ubuntu-latest
     environment: Deploy

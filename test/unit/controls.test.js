@@ -223,6 +223,112 @@ QUnit.test('SeekBar should be filled on 100% when the video/audio ends', functio
   window.cancelAnimationFrame = oldCAF;
 });
 
+QUnit.test('SeekBar keyboard increment is configurable', function(assert) {
+  const player = TestHelpers.makePlayer({
+    controlBar: {
+      progressControl: {
+        seekBar: {
+          stepSeconds: 2,
+          pageMultiplier: 4
+        }
+      }
+    }
+  });
+
+  const ctSpy = sinon.spy(player, 'currentTime');
+
+  player.duration(100);
+  player.currentTime(10);
+
+  player.controlBar.progressControl.seekBar.trigger({type: 'keydown', key: 'ArrowRight'});
+  // 10 + 2
+  assert.ok(ctSpy.calledWith(12), 'seeked configured amount');
+  ctSpy.resetHistory();
+
+  player.controlBar.progressControl.seekBar.trigger({type: 'keydown', key: 'PageUp'});
+  // 12 + (2 * 4)
+  assert.ok(ctSpy.calledWith(20), 'seeked configured amount with multiplier');
+  ctSpy.resetHistory();
+
+  player.controlBar.progressControl.seekBar.trigger({type: 'keydown', key: 'ArrowLeft'});
+  // 20 - 2
+  assert.ok(ctSpy.calledWith(18), 'seeked configured amount');
+  ctSpy.resetHistory();
+
+  player.controlBar.progressControl.seekBar.trigger({type: 'keydown', key: 'PageDown'});
+  // 18 - (2 * 4)
+  assert.ok(ctSpy.calledWith(10), 'seeked configured amount with multiplier');
+
+  player.dispose();
+});
+
+QUnit.test('SeekBar keyboard increment is configurable at runtime', function(assert) {
+  const player = TestHelpers.makePlayer({});
+
+  const ctSpy = sinon.spy(player, 'currentTime');
+
+  player.duration(100);
+  player.currentTime(10);
+
+  player.controlBar.progressControl.seekBar.trigger({type: 'keydown', key: 'ArrowRight'});
+  // 10 + 5
+  assert.ok(ctSpy.calledWith(15), 'seeked configured amount');
+  ctSpy.resetHistory();
+
+  player.controlBar.progressControl.seekBar.trigger({type: 'keydown', key: 'PageUp'});
+  // 15 + (5 * 12)
+  assert.ok(ctSpy.calledWith(75), 'seeked configured amount with multiplier');
+  ctSpy.resetHistory();
+
+  player.controlBar.progressControl.seekBar.trigger({type: 'keydown', key: 'ArrowLeft'});
+  // 75 - 5
+  assert.ok(ctSpy.calledWith(70), 'seeked configured amount');
+  ctSpy.resetHistory();
+
+  player.controlBar.progressControl.seekBar.trigger({type: 'keydown', key: 'PageDown'});
+  // 70 - (5 * 12)
+  assert.ok(ctSpy.calledWith(10), 'seeked configured amount with multiplier');
+  ctSpy.resetHistory();
+
+  player.controlBar.progressControl.seekBar.options().stepSeconds = 3;
+  player.controlBar.progressControl.seekBar.options().pageMultiplier = 3;
+
+  player.controlBar.progressControl.seekBar.trigger({type: 'keydown', key: 'ArrowRight'});
+  // 10 + 3
+  assert.ok(ctSpy.calledWith(13), 'seeked configured amount');
+  ctSpy.resetHistory();
+
+  player.controlBar.progressControl.seekBar.trigger({type: 'keydown', key: 'PageUp'});
+  // 13 + (3 * 3)
+  assert.ok(ctSpy.calledWith(22), 'seeked configured amount with multiplier');
+  ctSpy.resetHistory();
+
+  player.controlBar.progressControl.seekBar.trigger({type: 'keydown', key: 'ArrowLeft'});
+  // 22 - 3
+  assert.ok(ctSpy.calledWith(19), 'seeked configured amount');
+  ctSpy.resetHistory();
+
+  player.controlBar.progressControl.seekBar.trigger({type: 'keydown', key: 'PageDown'});
+  // 19 - (3 * 3)
+  assert.ok(ctSpy.calledWith(10), 'seeked configured amount with multiplier');
+
+  player.dispose();
+});
+
+QUnit.test('Seek bar percent should represent scrub location if we are scrubbing on mobile and have a pending seek time', function(assert) {
+  const player = TestHelpers.makePlayer();
+  const seekBar = player.controlBar.progressControl.seekBar;
+
+  player.duration(100);
+  seekBar.pendingSeekTime(20);
+
+  assert.equal(seekBar.getPercent(), 0.2, 'seek bar percent set correctly to pending seek time');
+
+  seekBar.pendingSeekTime(50);
+
+  assert.equal(seekBar.getPercent(), 0.5, 'seek bar percent set correctly to next pending seek time');
+});
+
 QUnit.test('playback rate button is hidden by default', function(assert) {
   assert.expect(1);
 
@@ -573,4 +679,137 @@ QUnit.test('Remaing time negative sign can be optional', function(assert) {
   rtd1.dispose();
   rtd2.dispose();
   player.dispose();
+});
+
+QUnit.test('Current time display shouldn\'t flash zero on seek', function(assert) {
+  const player = TestHelpers.makePlayer({ techOrder: ['html5'] });
+  const currentTimeDisplay = player.controlBar.currentTimeDisplay;
+  const spy = sinon.spy(currentTimeDisplay, 'updateTextNode_');
+
+  player.ended = () => false;
+  player.currentTime = () => 10;
+
+  currentTimeDisplay.updateContent({
+    target: {
+      pendingSeekTime: () => null
+    }
+  });
+
+  this.clock.tick(1);
+
+  assert.ok(spy.calledWith(10), 'control was updated with currentTime');
+  assert.notOk(spy.calledWith(null), 'control was not updated with null');
+  assert.notStrictEqual(currentTimeDisplay.formattedTime_, '0:00', 'display text not set to 0:00');
+
+});
+
+QUnit.module('SmartTV UI Updates (Progress Bar & Time Display)', function(hooks) {
+  let player;
+  let seekBar;
+  let currentTimeDisplay;
+
+  hooks.beforeEach(function() {
+    player = TestHelpers.makePlayer({
+      spatialNavigation: { enabled: true },
+      disableSeekWhileScrubbingOnSTV: true,
+      controlBar: {
+        progressControl: {
+          seekBar: {
+            stepSeconds: 5
+          }
+        }
+      }
+    });
+
+    seekBar = player.controlBar.progressControl.seekBar;
+    currentTimeDisplay = player.controlBar.getChild('currentTimeDisplay');
+
+    player.duration(100);
+  });
+
+  hooks.afterEach(function() {
+    player.dispose();
+  });
+
+  QUnit.test('Step forward updates seek bar progress and current-time display', function(assert) {
+    player.currentTime(40);
+    seekBar.stepForward();
+
+    assert.equal(
+      seekBar.pendingSeekTime(),
+      45,
+      'pendingSeekTime should be 45 (40 + 5) after stepForward'
+    );
+
+    assert.equal(
+      seekBar.getPercent(),
+      0.45,
+      'Seek bar progress should reflect 45% progress after stepForward'
+    );
+
+    assert.equal(
+      currentTimeDisplay.formattedTime_,
+      '0:45',
+      'Current-time-display should update to 45s after stepForward'
+    );
+  });
+
+  QUnit.test('Step back updates seek bar progress and current-time display', function(assert) {
+    player.currentTime(40);
+    seekBar.stepBack();
+
+    assert.equal(
+      seekBar.pendingSeekTime(),
+      35,
+      'pendingSeekTime should be 35 (40 - 5) after stepBack'
+    );
+
+    assert.equal(
+      seekBar.getPercent(),
+      0.35,
+      'Seek bar progress should reflect 35% progress after stepBack'
+    );
+
+    assert.equal(
+      currentTimeDisplay.formattedTime_,
+      '0:35',
+      'Current-time-display should update to 35s after stepBack'
+    );
+  });
+
+  QUnit.test('Pressing enter finalizes the seek and updates UI', function(assert) {
+    player.currentTime(40);
+    seekBar.stepForward();
+
+    seekBar.handleAction();
+
+    assert.equal(
+      seekBar.pendingSeekTime(),
+      null,
+      'pendingSeekTime should be reset to null after seeking'
+    );
+
+    assert.equal(
+      seekBar.getPercent(),
+      0.45,
+      'Seek bar progress should remain at 45% after seeking'
+    );
+
+    assert.equal(
+      currentTimeDisplay.formattedTime_,
+      '0:45',
+      'Current-time-display should remain at 45s after seeking'
+    );
+  });
+
+  QUnit.test('Resets pendingSeekTime when SmartTV focus moves away without confirmation', function(assert) {
+    const userSeekSpy = sinon.spy(seekBar, 'userSeek_');
+
+    seekBar.trigger({ type: 'keydown', key: 'ArrowUp' });
+    assert.ok(seekBar.pendingSeekTime() !== null, 'pendingSeekTime should be set after ArrowUp keydown');
+    seekBar.trigger({ type: 'keydown', key: 'ArrowLeft' });
+    assert.equal(seekBar.pendingSeekTime(), null, 'pendingSeekTime should be reset when SeekBar loses focus');
+    assert.ok(userSeekSpy.calledWith(player.currentTime()), 'userSeek_ should be called with current player time');
+    userSeekSpy.restore();
+  });
 });
